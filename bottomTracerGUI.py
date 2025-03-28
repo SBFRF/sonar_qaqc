@@ -114,6 +114,7 @@ class HDF5Annotator:
         self.image_for_saving = None
         self.total_slices = None
         self.total_time = None
+        self.slice_number = None
 
     def choose_output_directory(self):
         """Open a dialog to choose an output directory for saved files."""
@@ -193,6 +194,7 @@ class HDF5Annotator:
         for txt in self.fig.texts[:]:
             txt.remove()
         slice_number = self.idx_start // self.chunk_size + 1
+        self.slice_number = slice_number
         idxS = self.idx_start
         idxE = min(self.idx_start + self.chunk_size - 1, self.total_time - 1) if self.total_time is not None else self.idx_start + self.chunk_size - 1
         self.fig.text(0.01, 0.98, f"Slice #{slice_number} of {self.total_slices}\nTime Indices: {idxS} - {idxE}",
@@ -382,7 +384,7 @@ class HDF5Annotator:
         base = os.path.splitext(os.path.basename(self.file_path))[0]
         idxS = self.idx_start
         idxE = self.idx_start + (self.chunk_size - 1)
-        default_filename = f"{base}_bottomTraced_{idxS}-{idxE}.png"
+        default_filename = f"{base}_bottomTraced_slice{self.slice_number}_{idxS}-{idxE}.png"
         
         # Compute interpolated depth line and clear the manual trace.
         interp_values = self.interpolate_coordinates()
@@ -459,7 +461,7 @@ class HDF5Annotator:
         base = os.path.splitext(os.path.basename(self.file_path))[0]
         idxS = self.idx_start
         idxE = self.idx_start + (self.chunk_size - 1)
-        default_filename = f"{base}_bottomTraced_{idxS}-{idxE}.png"
+        default_filename = f"{base}_bottomTraced_slice{self.slice_number}_{idxS}-{idxE}.png"
         
         x_coords = np.arange(0, self.chunk_size)
         depth_coords = np.column_stack((x_coords, data))
