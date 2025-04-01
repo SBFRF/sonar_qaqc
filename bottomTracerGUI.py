@@ -12,6 +12,9 @@ class HDF5Annotator:
     A GUI tool for annotating HDF5 data files. This application loads a chunk of data from an HDF5 file,
     displays a pcolormesh image, and allows the user to trace or select an automatic depth line based on the
     available depth data. A "Jump To Slice" feature allows navigating directly to a specific slice.
+    
+    Additionally, each time a slice is saved, the corresponding depth line (by time index)
+    is appended/updated in a whole record HDF5 file (named "<base>_bottomTraced_wholeRecord.h5").
     """
     def __init__(self, root):
         self.root = root
@@ -100,6 +103,8 @@ class HDF5Annotator:
         
         # Initialize variables for file handling, image data, and annotations
         self.file_path = None
+        self.base_name = None
+        self.whole_record_file = None
         self.idx_start = 0
         self.image = None
         self.smooth_depth = None      # smooth_depth_m dataset (if available)
@@ -114,7 +119,6 @@ class HDF5Annotator:
         self.image_for_saving = None
         self.total_slices = None
         self.total_time = None
-        self.slice_number = None
 
     def choose_output_directory(self):
         """Open a dialog to choose an output directory for saved files."""
@@ -134,6 +138,16 @@ class HDF5Annotator:
                                                     filetypes=[("HDF5 files", "*.h5 *.hdf5")])
         if not self.file_path:
             return
+
+        # Store the base name (without extension) and create an output subfolder.
+        self.base_name = os.path.splitext(os.path.basename(self.file_path))[0]
+        selected_dir = self.output_dir_var.get()
+        self.output_folder = os.path.join(selected_dir, self.base_name)
+        if not os.path.exists(self.output_folder):
+            os.makedirs(self.output_folder)
+        # Set the whole record file path.
+        self.whole_record_file = os.path.join(self.output_folder, f"_{self.base_name}_bottomTraced_wholeRecord.h5")
+
         self.menu_frame.pack_forget()
         self.annotation_frame.pack(fill="both", expand=True)
         self.idx_start = 0
@@ -194,7 +208,6 @@ class HDF5Annotator:
         for txt in self.fig.texts[:]:
             txt.remove()
         slice_number = self.idx_start // self.chunk_size + 1
-        self.slice_number = slice_number
         idxS = self.idx_start
         idxE = min(self.idx_start + self.chunk_size - 1, self.total_time - 1) if self.total_time is not None else self.idx_start + self.chunk_size - 1
         self.fig.text(0.01, 0.98, f"Slice #{slice_number} of {self.total_slices}\nTime Indices: {idxS} - {idxE}",
@@ -369,10 +382,32 @@ class HDF5Annotator:
         self.last_x, self.last_y = None, None
         self.canvas_widget.delete("annotation")
 
+    def update_whole_record(self, time_indices, depth_values):
+        """
+        Update the whole record HDF5 file with the given time indices and depth values.
+        If the file does not exist, it is created with a dataset "depth_line_by_time_idx" of shape (total_time, 2),
+        where the first column is the time index and the second is initialized to NaN.
+        Then the rows corresponding to time_indices are updated with the new depth values.
+        """
+        if not os.path.exists(self.whole_record_file):
+            with h5py.File(self.whole_record_file, 'w') as hf:
+                full_data = np.column_stack((np.arange(self.total_time), np.full(self.total_time, np.nan)))
+                hf.create_dataset("depth_line_by_time_idx", data=full_data, maxshape=(self.total_time, 2))
+        with h5py.File(self.whole_record_file, 'r+') as hf:
+            dset = hf["depth_line_by_time_idx"]
+            # Update the dataset rows corresponding to time_indices
+            for i, idx in enumerate(time_indices):
+                dset[idx, 0] = idx  # first column: time index
+                dset[idx, 1] = depth_values[i]  # second column: depth value
+
     def save_data(self):
         """
         Save the manually traced depth line. Interpolates the coordinates, overlays the line,
         captures the current canvas as an image, and saves both the image and the depth line data.
+        The HDF5 file will contain two datasets:
+            - "depth_line_by_slice_idx": The 2-column array with slice indices and depth values.
+            - "depth_line_by_time_idx": The 2-column array with time indices (from idxS to idxE) and the same depth values.
+        Additionally, the whole record file is updated.
         """
         self.clear_button.config(state="disabled")
         self.save_button.config(state="disabled")
@@ -383,13 +418,15 @@ class HDF5Annotator:
             return
         base = os.path.splitext(os.path.basename(self.file_path))[0]
         idxS = self.idx_start
-        idxE = self.idx_start + (self.chunk_size - 1)
-        default_filename = f"{base}_bottomTraced_slice{self.slice_number}_{idxS}-{idxE}.png"
+        slice_length = min(self.chunk_size, self.total_time - idxS)
+        default_filename = f"{base}_bottomTraced_{idxS}-{idxS + slice_length - 1}.png"
         
         # Compute interpolated depth line and clear the manual trace.
         interp_values = self.interpolate_coordinates()
-        self.clear_annotations()
+        # Use only the valid portion if the slice is truncated.
+        interp_values = interp_values[:slice_length, :]
         
+        # Re-plot the interpolated line by splitting into continuous segments.
         valid = ~np.isnan(interp_values[:, 1])
         if np.any(valid):
             indices = np.where(valid)[0]
@@ -405,6 +442,8 @@ class HDF5Annotator:
                     else:
                         self.ax.plot(interp_values[seg, 0], interp_values[seg, 1],
                                      color='cyan', linewidth=2)
+        self.clear_annotations()
+        
         self.ax.legend(loc='upper right')
         self.canvas.draw()
         self.root.update()
@@ -415,7 +454,7 @@ class HDF5Annotator:
         y1 = y0 + self.canvas_widget.winfo_height()
         self.image_for_saving = ImageGrab.grab((x0, y0, x1, y1))
         
-        save_path = filedialog.asksaveasfilename(initialdir=self.output_dir_var.get(),
+        save_path = filedialog.asksaveasfilename(initialdir=self.output_folder,
                                                  initialfile=default_filename,
                                                  defaultextension=".png",
                                                  filetypes=[("PNG files", "*.png")])
@@ -424,8 +463,12 @@ class HDF5Annotator:
             print(f"Image saved: {save_path}")
             h5_path = save_path.replace('.png', '.h5')
             with h5py.File(h5_path, 'w') as hf:
-                hf.create_dataset("depth_line", data=interp_values)
+                hf.create_dataset("depth_line_by_slice_idx", data=interp_values)
+                time_indices = np.arange(idxS, idxS + slice_length)
+                hf.create_dataset("depth_line_by_time_idx", data=np.column_stack((time_indices, interp_values[:, 1])))
             print(f"Manual depth line saved: {h5_path}")
+            # Update whole record file.
+            self.update_whole_record(np.arange(idxS, idxS + slice_length), interp_values[:, 1])
         
         # Prevent further manual drawing on the current slice after saving.
         self.manual_line_saved = True
@@ -436,7 +479,11 @@ class HDF5Annotator:
     def save_depth_line(self):
         """
         Save the automatically generated depth line (smooth or ping). This method removes any existing lines,
-        plots the selected depth line, captures the canvas, and saves both the image and depth line data.
+        plots the selected depth line, captures the canvas, and saves both the image and the depth line data.
+        The HDF5 file will contain two datasets:
+            - "depth_line_by_slice_idx": The 2-column array with slice indices and depth values.
+            - "depth_line_by_time_idx": The 2-column array with time indices (from idxS to idxE) and the same depth values.
+        Additionally, the whole record file is updated.
         """
         self.clear_button.config(state="disabled")
         self.save_button.config(state="disabled")
@@ -460,16 +507,16 @@ class HDF5Annotator:
         
         base = os.path.splitext(os.path.basename(self.file_path))[0]
         idxS = self.idx_start
-        idxE = self.idx_start + (self.chunk_size - 1)
-        default_filename = f"{base}_bottomTraced_slice{self.slice_number}_{idxS}-{idxE}.png"
+        slice_length = min(self.chunk_size, self.total_time - idxS)
+        default_filename = f"{base}_bottomTraced_{idxS}-{idxS + slice_length - 1}.png"
         
-        x_coords = np.arange(0, self.chunk_size)
-        depth_coords = np.column_stack((x_coords, data))
+        x_coords = np.arange(0, slice_length)
+        depth_coords = np.column_stack((x_coords, data[:slice_length]))
         
         # Remove any previously plotted lines and plot the automatic depth line.
         for line in self.ax.get_lines():
             line.remove()
-        self.ax.plot(x_coords, data, color='cyan', linewidth=2, label=legend_label)
+        self.ax.plot(x_coords, data[:slice_length], color='cyan', linewidth=2, label=legend_label)
         self.ax.legend(loc='upper right')
         self.canvas.draw()
         self.root.update()
@@ -480,7 +527,7 @@ class HDF5Annotator:
         y1 = y0 + self.canvas_widget.winfo_height()
         self.image_for_saving = ImageGrab.grab((x0, y0, x1, y1))
         
-        save_path = filedialog.asksaveasfilename(initialdir=self.output_dir_var.get(),
+        save_path = filedialog.asksaveasfilename(initialdir=self.output_folder,
                                                  initialfile=default_filename,
                                                  defaultextension=".png",
                                                  filetypes=[("PNG files", "*.png")])
@@ -489,9 +536,13 @@ class HDF5Annotator:
             print(f"Image saved: {save_path}")
             h5_path = save_path.replace('.png', '.h5')
             with h5py.File(h5_path, 'w') as hf:
-                hf.create_dataset("depth_line", data=depth_coords)
+                hf.create_dataset("depth_line_by_slice_idx", data=depth_coords)
+                time_indices = np.arange(idxS, idxS + slice_length)
+                hf.create_dataset("depth_line_by_time_idx", data=np.column_stack((time_indices, depth_coords[:, 1])))
             print(f"Depth line saved: {h5_path}")
-
+            # Update whole record file.
+            self.update_whole_record(np.arange(idxS, idxS + slice_length), depth_coords[:, 1])
+        
 if __name__ == "__main__":
     root = tk.Tk()
     app = HDF5Annotator(root)
