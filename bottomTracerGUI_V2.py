@@ -145,7 +145,7 @@ class HDF5Annotator:
         self.output_folder = os.path.join(selected_dir, self.base_name)
         if not os.path.exists(self.output_folder):
             os.makedirs(self.output_folder)
-        self.whole_record_file = os.path.join(self.output_folder, f"{self.base_name}_bottomTraced_wholeRecord.h5")
+        self.whole_record_file = os.path.join(self.output_folder, f"_{self.base_name}_bottomTraced_wholeRecord.h5")
         self.menu_frame.pack_forget()
         self.annotation_frame.pack(fill="both", expand=True)
         self.idx_start = 0
