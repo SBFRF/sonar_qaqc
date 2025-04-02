@@ -161,10 +161,17 @@ class HDF5Annotator:
         with h5py.File(self.file_path, "r") as f:
             self.total_time = f["time"].shape[0]
             self.total_slices = int(np.ceil(self.total_time / self.chunk_size))
+            # Determine the end index for this chunk.
+            end_idx = min(self.idx_start + self.chunk_size, self.total_time)
+            # If there is no data left, prompt the user.
             if self.idx_start >= self.total_time:
-                print("All data processed.")
+                response = messagebox.askyesno("All slices annotated", 
+                                            "All slices have been annotated. Are you done editing?")
+                if response:
+                    self.root.destroy()
+                    print("Bottom tracing program complete!")
                 return
-            idx = slice(self.idx_start, min(self.idx_start + self.chunk_size, self.total_time))
+            idx = slice(self.idx_start, end_idx)
             self.image = f["profile_data"][:, idx]
             if "smooth_depth_m" in f:
                 self.smooth_depth = f["smooth_depth_m"][idx]
@@ -195,15 +202,10 @@ class HDF5Annotator:
     def update_display(self):
         self.ax.clear()
         self.ax.pcolormesh(self.image, cmap="plasma")
-        # Set title based on mode.
-        if self.depth_option.get() == "Off" and not self.edit_mode:
-            self.ax.set_title("Manual Tracing Enabled:\nLeft click and drag to trace the depth line. Start, stop, and skip sections as needed.")
-            self.applied_line = False
-        elif not self.edit_mode:
-            self.ax.set_title("")
-        self.ax.yaxis.set_ticks_position("both")
-        self.ax.tick_params(axis="y", labelleft=True, labelright=True)
-        self.ax.set_xlim(0, self.chunk_size)
+        # Determine the current slice length from the image width.
+        slice_length = self.image.shape[1]
+        # Set the x-axis to the actual slice length.
+        self.ax.set_xlim(0, slice_length)
         self.ax.set_ylim(0, self.image.shape[0])
         if self.depth_option.get() != "Off" and ((self.smooth_depth_img is not None) or (self.this_ping_depth_img is not None)):
             self.plot_depth()
@@ -251,17 +253,18 @@ class HDF5Annotator:
                 self.save_depth_button.config(text="Save Edited Depth Line", command=self.save_edited_depth_line, state="disabled")
 
     def plot_depth(self):
-        # Plot the automatic (factory) depth line based on the selected toggle.
         if self.depth_option.get() == "Smooth Depth":
             data = self.smooth_depth_img
         elif self.depth_option.get() == "Ping Depth":
             data = self.this_ping_depth_img
         else:
             return
-        x = np.arange(0, self.chunk_size)
+        # Use the actual slice length for the x-axis.
+        slice_length = self.image.shape[1]
+        x = np.arange(0, slice_length)
         if data is not None:
-            alpha_val = 1.0 if not self.edit_mode else 0.35  # Reduce opacity in editing mode.
-            self.ax.plot(x, data, color="blue", linewidth=2, alpha=alpha_val, label=self.depth_option.get())
+            alpha_val = 1.0 if not self.edit_mode else 0.35
+            self.ax.plot(x, data[:slice_length], color="blue", linewidth=2, alpha=alpha_val, label=self.depth_option.get())
             self.ax.legend(loc="upper right")
             self.canvas.draw()
 
@@ -684,10 +687,6 @@ class HDF5Annotator:
         messagebox.showinfo("NaN Out Mode", "Drawing enabled in red. Draw over sections to NaN out those values.")
 
     def save_depth_line(self):
-        """
-        Save the factory (automatic) depth line without any manual edits.
-        The depth line is re-plotted in blue, and both a PNG and HDF5 file are saved.
-        """
         self.clear_button.config(state="disabled")
         self.save_button.config(state="disabled")
         self.save_depth_button.config(state="disabled")
@@ -696,10 +695,8 @@ class HDF5Annotator:
             return
         if self.depth_option.get() == "Smooth Depth":
             data = self.smooth_depth_img
-            legend_label = f"Saved {self.depth_option.get()} Depth Line"
         elif self.depth_option.get() == "Ping Depth":
             data = self.this_ping_depth_img
-            legend_label = f"Saved {self.depth_option.get()} Depth Line"
         else:
             data = None
         if data is None:
@@ -709,11 +706,12 @@ class HDF5Annotator:
         slice_length = min(self.chunk_size, self.total_time - idxS)
         x_coords = np.arange(0, slice_length)
         depth_coords = data[:slice_length]
-        # Remove any existing plotted lines before plotting the saved line.
-        for line in self.ax.get_lines():
-            line.remove()
-        self.ax.plot(x_coords, depth_coords, color="blue", linewidth=2, label=legend_label)
+        # Clear the axes and replot the image and depth line in cyan.
+        self.ax.clear()
+        self.ax.pcolormesh(self.image, cmap="plasma")
+        self.ax.plot(x_coords, depth_coords, color="cyan", linewidth=2, label="Saved Depth Line")
         self.ax.legend(loc="upper right")
+        self.ax.set_title("")
         self.canvas.draw()
         self.root.update()
         default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + slice_length - 1}.png"
@@ -722,7 +720,7 @@ class HDF5Annotator:
         x1 = x0 + self.canvas_widget.winfo_width()
         y1 = y0 + self.canvas_widget.winfo_height()
         self.image_for_saving = ImageGrab.grab((x0, y0, x1, y1))
-        save_path = filedialog.asksaveasfilename(initialdir=self.output_dir_var.get(),
+        save_path = filedialog.asksaveasfilename(initialdir=self.output_folder,
                                                 initialfile=default_filename,
                                                 defaultextension=".png",
                                                 filetypes=[("PNG files", "*.png")])
