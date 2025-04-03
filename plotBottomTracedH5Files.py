@@ -44,7 +44,7 @@ with h5py.File(selected_file, 'r') as f:
         exit()
 
 # Create a pcolormesh plot of the profile_data_slice
-fig, ax = plt.subplots(figsize=(12, 8))
+fig, ax = plt.subplots(figsize=(18, 12))
 c = ax.pcolormesh(profile_data_slice, cmap='plasma')
 
 # Overlay the depth line in cyan
