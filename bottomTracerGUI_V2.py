@@ -123,6 +123,8 @@ class HDF5Annotator:
         self.total_slices = None
         self.total_time = None
         self.applied_line = None
+        self.slice_number = None
+        self.slice_length = None
 
     # -------------------- Utility Methods --------------------
     def choose_output_directory(self):
@@ -161,16 +163,8 @@ class HDF5Annotator:
         with h5py.File(self.file_path, "r") as f:
             self.total_time = f["time"].shape[0]
             self.total_slices = int(np.ceil(self.total_time / self.chunk_size))
-            # Determine the end index for this chunk.
+            self.slice_number = self.idx_start // self.chunk_size + 1
             end_idx = min(self.idx_start + self.chunk_size, self.total_time)
-            # If there is no data left, prompt the user.
-            if self.idx_start >= self.total_time:
-                response = messagebox.askyesno("All slices annotated", 
-                                            "All slices have been annotated. Are you done editing?")
-                if response:
-                    self.root.destroy()
-                    print("Bottom tracing program complete!")
-                return
             idx = slice(self.idx_start, end_idx)
             self.image = f["profile_data"][:, idx]
             if "smooth_depth_m" in f:
@@ -203,19 +197,18 @@ class HDF5Annotator:
         self.ax.clear()
         self.ax.pcolormesh(self.image, cmap="plasma")
         # Determine the current slice length from the image width.
-        slice_length = self.image.shape[1]
+        self.slice_length = self.image.shape[1]
         # Set the x-axis to the actual slice length.
-        self.ax.set_xlim(0, slice_length)
+        self.ax.set_xlim(0, self.slice_length)
         self.ax.set_ylim(0, self.image.shape[0])
         if self.depth_option.get() != "Off" and ((self.smooth_depth_img is not None) or (self.this_ping_depth_img is not None)):
             self.plot_depth()
         # Remove any existing figure texts and add slice info.
         for txt in self.fig.texts[:]:
             txt.remove()
-        slice_number = self.idx_start // self.chunk_size + 1
         idxS = self.idx_start
         idxE = min(self.idx_start + self.chunk_size - 1, self.total_time - 1)
-        self.fig.text(0.01, 0.98, f"Slice #{slice_number} of {self.total_slices}\nTime Indices: {idxS} - {idxE}",
+        self.fig.text(0.01, 0.98, f"Slice #{self.slice_number} of {self.total_slices}\nTime Indices: {idxS} - {idxE}",
                     horizontalalignment="left", verticalalignment="top", fontsize=12, color="black")
         self.canvas.draw()
         self.coordinates = []
@@ -230,7 +223,7 @@ class HDF5Annotator:
         if self.depth_option.get() != "Off" and not self.edit_mode:
             self.clear_button.grid_remove()
         self.update_button_states()
-        self.jump_slice_var.set(str(slice_number))
+        self.jump_slice_var.set(str(self.slice_number))
 
     def update_button_states(self):
         if self.depth_option.get() == "Off":
@@ -251,6 +244,8 @@ class HDF5Annotator:
                 self.clear_button.config(text="Clear Annotations", command=self.clear_edit_mode, state="normal")
                 self.save_button.config(text="Apply Edits", command=self.apply_edits, state="normal")
                 self.save_depth_button.config(text="Save Edited Depth Line", command=self.save_edited_depth_line, state="disabled")
+        self.next_button_jump.config(state="normal" if self.slice_number < self.total_slices else "disabled")
+        self.prev_button_jump.config(state="normal" if self.slice_number > 1 else "disabled")
 
     def plot_depth(self):
         if self.depth_option.get() == "Smooth Depth":
@@ -260,11 +255,10 @@ class HDF5Annotator:
         else:
             return
         # Use the actual slice length for the x-axis.
-        slice_length = self.image.shape[1]
-        x = np.arange(0, slice_length)
+        x = np.arange(0, self.slice_length)
         if data is not None:
             alpha_val = 1.0 if not self.edit_mode else 0.35
-            self.ax.plot(x, data[:slice_length], color="blue", linewidth=2, alpha=alpha_val, label=self.depth_option.get())
+            self.ax.plot(x, data[:self.slice_length], color="blue", linewidth=2, alpha=alpha_val, label=self.depth_option.get())
             self.ax.legend(loc="upper right")
             self.canvas.draw()
 
@@ -276,7 +270,7 @@ class HDF5Annotator:
         self.depth_option.set("Ping Depth")
         for child in self.depth_frame.winfo_children():
             child.config(state="normal")
-        self.idx_start = max(0, self.idx_start - self.chunk_size)
+        self.idx_start = self.idx_start - self.chunk_size
         self.process_next_chunk()
 
     def next_slice(self):
@@ -287,9 +281,7 @@ class HDF5Annotator:
         self.depth_option.set("Ping Depth")
         for child in self.depth_frame.winfo_children():
             child.config(state="normal")
-        with h5py.File(self.file_path, "r") as f:
-            total_time = f["time"].shape[0]
-        self.idx_start = min(self.idx_start + self.chunk_size, total_time - self.chunk_size)
+        self.idx_start = self.idx_start + self.chunk_size
         self.process_next_chunk()
 
     def jump_to_slice(self):
@@ -487,7 +479,7 @@ class HDF5Annotator:
         self.draw_mode = "green"
         self.ax.clear()
         self.ax.pcolormesh(self.image, cmap="plasma")
-        self.ax.set_xlim(0, self.chunk_size)
+        self.ax.set_xlim(0, self.slice_length)
         self.ax.set_ylim(0, self.image.shape[0])
         if self.depth_option.get() == "Smooth Depth":
             data = self.smooth_depth_img
@@ -496,7 +488,7 @@ class HDF5Annotator:
         else:
             data = None
         if data is not None:
-            x = np.arange(0, self.chunk_size)
+            x = np.arange(0, self.slice_length)
             self.ax.plot(x, data, color="blue", linewidth=2, alpha=0.35, label=self.depth_option.get())
         self.ax.set_title("Editing Mode Enabled:\nLeft click to draw edits (green), Right click for NaN out (red).")
         self.ax.legend(loc="upper right")
@@ -529,19 +521,17 @@ class HDF5Annotator:
         else:
             messagebox.showerror("Error", "No factory line data available!")
             return
-        idxS = self.idx_start
-        slice_length = min(self.chunk_size, self.total_time - idxS)
-        auto_slice = factory_line[:slice_length].copy()
-        green_edit = self.interpolate_coordinates_by_color("green")[:slice_length, 1]
-        red_edit = self.interpolate_coordinates_by_color("red")[:slice_length, 1]
+        auto_slice = factory_line[:self.slice_length].copy()
+        green_edit = self.interpolate_coordinates_by_color("green")[:self.slice_length, 1]
+        red_edit = self.interpolate_coordinates_by_color("red")[:self.slice_length, 1]
         merged = np.copy(auto_slice)
-        for i in range(slice_length):
+        for i in range(self.slice_length):
             if not np.isnan(red_edit[i]):
                 merged[i] = np.nan
             elif not np.isnan(green_edit[i]):
                 merged[i] = green_edit[i]
         self.edited_line = merged
-        x_vals = np.arange(slice_length)
+        x_vals = np.arange(self.slice_length)
         self.ax.clear()
         self.ax.pcolormesh(self.image, cmap="plasma")
         self.ax.plot(x_vals, merged, color="blue", linewidth=2, label=self.depth_option.get())
@@ -557,15 +547,15 @@ class HDF5Annotator:
         """
         Merge the manually traced (green) line.
         The traced line is replotted in blue, drawing is disabled, and toggle options are locked.
+        In manual tracing mode, if no annotations were made, the entire slice will be set to NaN.
         """
         if not self.coordinates:
-            messagebox.showerror("Error", "No tracing data available!")
-            return
+            messagebox.showinfo("No annotations", "No annotations found.\nThis will result in the whole slice being NaN'd out.")
+            traced_values = np.full(self.slice_length, np.nan)
+        else:
+            traced_values = self.interpolate_coordinates_by_color("green")[:self.slice_length, 1]
         self.canvas_widget.delete("annotation")
-        idxS = self.idx_start
-        slice_length = min(self.chunk_size, self.total_time - idxS)
-        traced_values = self.interpolate_coordinates_by_color("green")[:slice_length, 1]
-        x_vals = np.arange(slice_length)
+        x_vals = np.arange(self.slice_length)
         self.ax.clear()
         self.ax.pcolormesh(self.image, cmap="plasma")
         self.ax.plot(x_vals, traced_values, color="blue", linewidth=2, label="Manual Depth Line")
@@ -590,8 +580,7 @@ class HDF5Annotator:
             return
         merged = self.edited_line
         idxS = self.idx_start
-        slice_length = min(self.chunk_size, self.total_time - idxS)
-        x_vals = np.arange(slice_length)
+        x_vals = np.arange(self.slice_length)
         self.ax.clear()
         self.ax.pcolormesh(self.image, cmap="plasma")
         self.ax.plot(x_vals, merged, color="cyan", linewidth=2, label="Saved Depth Line")
@@ -599,7 +588,7 @@ class HDF5Annotator:
         self.ax.set_title("")
         self.canvas.draw()
         self.root.update()
-        default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + slice_length - 1}.png"
+        default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + self.slice_length - 1}.png"
         x0 = self.root.winfo_rootx() + self.canvas_widget.winfo_x()
         y0 = self.root.winfo_rooty() + self.canvas_widget.winfo_y()
         x1 = x0 + self.canvas_widget.winfo_width()
@@ -616,29 +605,32 @@ class HDF5Annotator:
             with h5py.File(h5_path, "w") as hf:
                 merged_data = np.column_stack((x_vals, merged))
                 hf.create_dataset("depth_line_by_slice_idx", data=merged_data)
-                time_indices = np.arange(idxS, idxS + slice_length)
+                time_indices = np.arange(idxS, idxS + self.slice_length)
                 hf.create_dataset("depth_line_by_time_idx", data=np.column_stack((time_indices, merged)))
+                # Save the profile_data for this slice
+                hf.create_dataset("profile_data_slice", data=self.image)
             print(f"Edited depth line saved: {h5_path}")
-            self.update_whole_record(np.arange(idxS, idxS + slice_length), merged)
-        self.next_slice()
+            self.update_whole_record(np.arange(idxS, idxS + self.slice_length), merged)
         self.unbind_all_events()
+        self.slice_saved()
 
     def save_data(self):
         """
         Save the manually drawn depth line.
         The traced line is re-plotted in cyan and both a PNG and HDF5 file are saved.
         After saving, the next slice is automatically loaded.
+        If no manual annotations are found, the entire slice is saved as NaN.
         """
         self.clear_button.config(state="disabled")
         self.save_button.config(state="disabled")
         self.save_depth_button.config(state="disabled")
-        if self.image is None or not self.coordinates:
-            print("No annotations to save.")
+        if self.image is None:
+            messagebox.showerror("Error", "No image loaded to save.")
             return
         idxS = self.idx_start
-        slice_length = min(self.chunk_size, self.total_time - idxS)
-        default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + slice_length - 1}.png"
-        interp_values = self.interpolate_coordinates()[:slice_length, :]
+        default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + self.slice_length - 1}.png"
+        # Get interpolated values even if no annotations exist (will be all NaN)
+        interp_values = self.interpolate_coordinates()[:self.slice_length, :]
         valid = ~np.isnan(interp_values[:, 1])
         self.clear_annotations()
         if np.any(valid):
@@ -655,6 +647,10 @@ class HDF5Annotator:
                     else:
                         self.ax.plot(interp_values[seg, 0], interp_values[seg, 1],
                                     color="cyan", linewidth=2)
+        else:
+            # Plot a full NaN line (optional, may not be visible)
+            self.ax.plot(np.arange(self.slice_length), np.full(self.slice_length, np.nan),
+                        color="cyan", linewidth=2, label="Saved Depth Line")
         self.ax.legend(loc="upper right")
         # Remove any manual depth line artifacts.
         for line in self.ax.get_lines():
@@ -673,13 +669,15 @@ class HDF5Annotator:
             h5_path = save_path.replace(".png", ".h5")
             with h5py.File(h5_path, "w") as hf:
                 hf.create_dataset("depth_line_by_slice_idx", data=interp_values)
-                time_indices = np.arange(idxS, idxS + slice_length)
+                time_indices = np.arange(idxS, idxS + self.slice_length)
                 hf.create_dataset("depth_line_by_time_idx", data=np.column_stack((time_indices, interp_values[:, 1])))
+                # Save the profile_data for this slice
+                hf.create_dataset("profile_data_slice", data=self.image)
             print(f"Manual depth line saved: {h5_path}")
-            self.update_whole_record(np.arange(idxS, idxS + slice_length), interp_values[:, 1])
+            self.update_whole_record(np.arange(idxS, idxS + self.slice_length), interp_values[:, 1])
         self.manual_line_saved = True
-        self.next_slice()
         self.unbind_all_events()
+        self.slice_saved()
 
     def enable_nan_out_drawing(self):
         """Enable red drawing mode for NaN-ing out values."""
@@ -703,9 +701,8 @@ class HDF5Annotator:
             messagebox.showerror("Error", "Depth data not available!")
             return
         idxS = self.idx_start
-        slice_length = min(self.chunk_size, self.total_time - idxS)
-        x_coords = np.arange(0, slice_length)
-        depth_coords = data[:slice_length]
+        x_coords = np.arange(0, self.slice_length)
+        depth_coords = data[:self.slice_length]
         # Clear the axes and replot the image and depth line in cyan.
         self.ax.clear()
         self.ax.pcolormesh(self.image, cmap="plasma")
@@ -714,7 +711,7 @@ class HDF5Annotator:
         self.ax.set_title("")
         self.canvas.draw()
         self.root.update()
-        default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + slice_length - 1}.png"
+        default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + self.slice_length - 1}.png"
         x0 = self.root.winfo_rootx() + self.canvas_widget.winfo_x()
         y0 = self.root.winfo_rooty() + self.canvas_widget.winfo_y()
         x1 = x0 + self.canvas_widget.winfo_width()
@@ -731,26 +728,48 @@ class HDF5Annotator:
             with h5py.File(h5_path, "w") as hf:
                 merged_data = np.column_stack((x_coords, depth_coords))
                 hf.create_dataset("depth_line_by_slice_idx", data=merged_data)
-                time_indices = np.arange(idxS, idxS + slice_length)
+                time_indices = np.arange(idxS, idxS + self.slice_length)
                 hf.create_dataset("depth_line_by_time_idx", data=np.column_stack((time_indices, depth_coords)))
+                # Save the profile_data for this slice
+                hf.create_dataset("profile_data_slice", data=self.image)
             print(f"Depth line saved: {h5_path}")
-            self.update_whole_record(np.arange(idxS, idxS + slice_length), depth_coords)
+            self.update_whole_record(np.arange(idxS, idxS + self.slice_length), depth_coords)
         self.manual_line_saved = True
         self.unbind_all_events()
-        self.next_slice()
+        self.slice_saved()
 
+    def slice_saved(self):
+        if self.slice_number != self.total_slices:
+            self.next_slice()
+        else:
+            response = messagebox.askyesno("All slices annotated", 
+                                        "All slices have been annotated. Are you done editing?")
+            if response:
+                self.root.destroy()
+                print("Bottom tracing program complete!")
+                return
+            
     def update_whole_record(self, time_indices, depth_values):
-        # Update or create the whole-record HDF5 file that stores the depth line over time.
-        if not os.path.exists(self.whole_record_file):
-            with h5py.File(self.whole_record_file, "w") as hf:
+        # Open (or create) the whole-record file in append mode to avoid locking issues.
+        with h5py.File(self.whole_record_file, "a", locking=False) as hf:
+            # If "profile_data" does not exist, load it from the raw input file and create the dataset.
+            if "profile_data" not in hf:
+                with h5py.File(self.file_path, "r", locking=False) as raw_f:
+                    full_profile_data = raw_f["profile_data"][:]
+                hf.create_dataset("profile_data", data=full_profile_data)
+            
+            # If the "depth_line_by_time_idx" dataset does not exist, create it.
+            if "depth_line_by_time_idx" not in hf:
                 full_data = np.column_stack((np.arange(self.total_time), np.full(self.total_time, np.nan)))
                 hf.create_dataset("depth_line_by_time_idx", data=full_data, maxshape=(self.total_time, 2))
-        with h5py.File(self.whole_record_file, "r+") as hf:
-            dset = hf["depth_line_by_time_idx"]
-            for i, idx in enumerate(time_indices):
-                dset[idx, 0] = idx
-                dset[idx, 1] = depth_values[i]
-
+            else:
+                # Otherwise, update the existing dataset with new depth values.
+                dset = hf["depth_line_by_time_idx"]
+                for i, idx in enumerate(time_indices):
+                    dset[idx, 0] = idx
+                    dset[idx, 1] = depth_values[i]
+        print(f'Whole record updated: {self.whole_record_file}')
+                 
 if __name__ == "__main__":
     root = tk.Tk()
     app = HDF5Annotator(root)
