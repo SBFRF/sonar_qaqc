@@ -123,6 +123,7 @@ class HDF5Annotator:
         self.base_name = None
         self.whole_record_file = None
         self.idx_start = 0
+        self.data_blanking_distance_cm = 5
         self.image = None
         self.smooth_depth = None
         self.length_mm = None
@@ -139,6 +140,8 @@ class HDF5Annotator:
         self.applied_line = None
         self.slice_number = None
         self.slice_length = None
+        self.ymin = None
+        self.ymax = None
         
     def on_canvas_destroy(self, event):
         if not self.canvas_widget.winfo_exists():
@@ -176,6 +179,8 @@ class HDF5Annotator:
         self.depth_option.set("Ping Depth")
         for child in self.depth_frame.winfo_children():
             child.config(state="normal")
+        for child in self.y_axis_frame.winfo_children():
+            child.config(state="normal")
         self.process_next_chunk()
 
     def process_next_chunk(self):
@@ -205,6 +210,11 @@ class HDF5Annotator:
         if self.bin_size is not None:
             self.smooth_depth_img = self.smooth_depth / self.bin_size if self.smooth_depth is not None else None
             self.this_ping_depth_img = self.this_ping_depth_m / self.bin_size if self.this_ping_depth_m is not None else None
+            # Mask out shallow values
+            if self.smooth_depth_img is not None:
+                self.smooth_depth_img[self.smooth_depth < (self.data_blanking_distance_cm/100)] = np.nan
+            if self.this_ping_depth_img is not None:
+                self.this_ping_depth_img[self.this_ping_depth_m < (self.data_blanking_distance_cm/100)] = np.nan
         else:
             self.smooth_depth_img = None
             self.this_ping_depth_img = None
@@ -333,6 +343,8 @@ class HDF5Annotator:
         self.depth_option.set("Ping Depth")
         for child in self.depth_frame.winfo_children():
             child.config(state="normal")
+        for child in self.y_axis_frame.winfo_children():
+            child.config(state="normal")
         self.idx_start -= self.chunk_size
         self.process_next_chunk()
 
@@ -341,7 +353,10 @@ class HDF5Annotator:
         self.manual_line_saved = False
         self.edit_mode = False
         self.depth_option.set("Ping Depth")
+        self.y_update_button.config(state="normal")
         for child in self.depth_frame.winfo_children():
+            child.config(state="normal")
+        for child in self.y_axis_frame.winfo_children():
             child.config(state="normal")
         self.idx_start += self.chunk_size
         self.process_next_chunk()
@@ -361,6 +376,8 @@ class HDF5Annotator:
         self.idx_start = (target_slice - 1) * self.chunk_size
         self.depth_option.set("Ping Depth")
         for child in self.depth_frame.winfo_children():
+            child.config(state="normal")
+        for child in self.y_axis_frame.winfo_children():
             child.config(state="normal")
         self.process_next_chunk()
 
@@ -545,7 +562,8 @@ class HDF5Annotator:
         self.draw_mode = "green"
         self.ax.clear()
         self.ax.pcolormesh(self.image, cmap="plasma")
-        self.ax.set_ylim(self.ymin, self.ymax)
+        if self.ymin is not None and self.ymax is not None:
+            self.ax.set_ylim(self.ymin, self.ymax)
         self.ax.tick_params(axis='y', which='both', labelleft=True, labelright=True)
         if self.depth_option.get() == "Smooth Depth":
             data = self.smooth_depth_img
@@ -564,6 +582,8 @@ class HDF5Annotator:
         self.ax.tick_params(axis='y', labelsize=14)
         self.canvas.draw()
         for child in self.depth_frame.winfo_children():
+            child.config(state="disabled")
+        for child in self.y_axis_frame.winfo_children():
             child.config(state="disabled")
         self.unbind_all_events()
         self.canvas_widget.bind("<Button-1>", self.start_tracing_editing_green)
@@ -612,9 +632,11 @@ class HDF5Annotator:
         green_mask = ~np.isnan(green_edit)          # where user drew new points
         orig_mask  = np.isnan(green_edit)           # untouched, factory points
         # plot factory/original depth‐line points in blue
-        self.ax.plot(x_vals[orig_mask],merged[orig_mask],marker='o',linestyle ='',color="blue",linewidth=2,label="Original Depth Line")
+        masked_orig = np.ma.masked_invalid(merged[orig_mask])
+        self.ax.plot(x_vals[orig_mask], masked_orig, linestyle='-', color="blue", linewidth=2, label="Original Depth Line")
         # plot overridden points in green
-        self.ax.plot(x_vals[green_mask],merged[green_mask],marker='o',linestyle ='',color="green",linewidth=2,label="Manual Edits")
+        masked_manual = np.ma.masked_invalid(merged[green_mask])
+        self.ax.plot(x_vals[green_mask], masked_manual, linestyle='-', color="green", linewidth=2, label="Manual Edits")
         self.ax.tick_params(axis='y', which='both', labelleft=True, labelright=True)
         self.ax.legend(loc="upper right")
         self.ax.set_title("")
@@ -643,7 +665,6 @@ class HDF5Annotator:
             self.canvas.draw()
             self.save_data()
             return
-        
         traced_values = self.interpolate_coordinates_by_color("green")[:self.slice_length, 1]
         self.canvas_widget.delete("annotation")
         x_vals = np.arange(self.slice_length)
@@ -658,7 +679,6 @@ class HDF5Annotator:
         self.ax.tick_params(axis='y', labelsize=14)
         self.add_secondary_y_axis()
         self.canvas.draw()
-
         for child in self.depth_frame.winfo_children():
             child.config(state="disabled")
         self.unbind_all_events()
@@ -822,7 +842,6 @@ class HDF5Annotator:
         y1 = y0 + self.canvas_widget.winfo_height()
         self.image_for_saving = ImageGrab.grab((x0, y0, x1, y1))
         raw_dir = os.path.dirname(self.input_file_path)
-        # PNG → qcPlots/
         qcplots = os.path.join(raw_dir, "qcPlots")
         os.makedirs(qcplots, exist_ok=True)
         png_path = os.path.join(qcplots, default_filename)
