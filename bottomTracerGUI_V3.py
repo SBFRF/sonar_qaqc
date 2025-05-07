@@ -231,6 +231,7 @@ class HDF5Annotator:
         idxE = min(self.idx_start + self.chunk_size - 1, self.total_time - 1)
         self.fig.text(0.01, 0.98, f"Slice #{self.slice_number} of {self.total_slices}\nTime Indices: {idxS} - {idxE}",
                       horizontalalignment="left", verticalalignment="top", fontsize=12, color="black")
+        self.add_secondary_y_axis()
         self.canvas.draw()
         self.coordinates = []
         self.tracing = False
@@ -243,6 +244,18 @@ class HDF5Annotator:
             self.clear_button.grid_remove()
         self.update_button_states()
         self.jump_slice_var.set(str(self.slice_number))
+
+    def add_secondary_y_axis(self):
+        for ax in self.fig.axes:
+            if ax is not self.ax and ax.get_label() == "secondary_y":
+                self.fig.delaxes(ax)
+        
+        if self.bin_size is not None:
+            ax2 = self.ax.twinx()
+            ax2.set_ylim(self.ax.get_ylim()[0] * self.bin_size, self.ax.get_ylim()[1] * self.bin_size)
+            ax2.set_ylabel("Depth Range (m)", fontsize=15)
+            ax2.tick_params(axis='y', labelsize=14)
+            ax2.set_label("secondary_y")  # Set label to identify later
 
     def update_button_states(self):
         if self.depth_option.get() == "Off":
@@ -283,6 +296,7 @@ class HDF5Annotator:
             messagebox.showerror("Invalid Input", "The difference between the limits must be at least 100.")
             return
         self.ax.set_ylim(self.ymin, self.ymax)
+        self.add_secondary_y_axis()
         self.canvas.draw()
         self.sync_y_axis_entries()
 
@@ -296,6 +310,7 @@ class HDF5Annotator:
         self.ymin_entry.insert(0, str(int(ymin)))
         self.ymax_entry.delete(0, tk.END)
         self.ymax_entry.insert(0, str(int(ymax)))
+        self.add_secondary_y_axis()
 
     def plot_depth(self):
         if self.depth_option.get() == "Smooth Depth":
@@ -607,6 +622,7 @@ class HDF5Annotator:
         self.ax.set_ylabel("Bin #", fontsize=15)
         self.ax.tick_params(axis='x', labelsize=14)
         self.ax.tick_params(axis='y', labelsize=14)
+        self.add_secondary_y_axis()
         self.canvas.draw()
         self.clear_annotations()
         self.unbind_all_events()
@@ -640,6 +656,7 @@ class HDF5Annotator:
         self.ax.set_ylabel("Bin #", fontsize = 15)
         self.ax.tick_params(axis='x', labelsize=14)  
         self.ax.tick_params(axis='y', labelsize=14)
+        self.add_secondary_y_axis()
         self.canvas.draw()
 
         for child in self.depth_frame.winfo_children():
@@ -671,6 +688,7 @@ class HDF5Annotator:
         self.ax.set_ylabel("Bin #", fontsize=15)
         self.ax.tick_params(axis='x', labelsize=14)
         self.ax.tick_params(axis='y', labelsize=14)
+        self.add_secondary_y_axis()
         self.canvas.draw()
         self.root.update()
         default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + self.slice_length - 1}.png"
@@ -689,7 +707,7 @@ class HDF5Annotator:
         os.makedirs(qcplots, exist_ok=True)
         png_path = os.path.join(qcplots, default_filename)
         self.image_for_saving.save(png_path)
-        print(f"Image saved: {png_path}")
+        print(f"Image saved: {os.path.normpath(png_path)}")
         qcddata = os.path.join(raw_dir, "qcdData")
         os.makedirs(qcddata, exist_ok=True)
         h5_name = default_filename.replace(".png", ".h5")
@@ -700,7 +718,7 @@ class HDF5Annotator:
             time_indices = np.arange(idxS, idxS + self.slice_length)
             hf.create_dataset("depth_line_by_time_idx",data=np.column_stack((time_indices, merged)))
             hf.create_dataset("profile_data_slice", data=self.image)
-        print(f"Depth line saved: {h5_path}")
+        print(f"Depth line saved: {os.path.normpath(h5_path)}")
         self.update_whole_record(np.arange(idxS, idxS + self.slice_length), merged)
         self.unbind_all_events()
         self.slice_saved()
@@ -741,6 +759,7 @@ class HDF5Annotator:
         for line in self.ax.get_lines():
             if line.get_label() == "Manual Depth Line":
                 line.remove()
+        self.add_secondary_y_axis()
         self.canvas.draw()
         self.root.update()
         self.image_for_saving = Image.fromarray(np.array(self.fig.canvas.renderer.buffer_rgba()))
@@ -749,7 +768,7 @@ class HDF5Annotator:
         os.makedirs(qcplots, exist_ok=True)
         png_path = os.path.join(qcplots, default_filename)
         self.image_for_saving.save(png_path)
-        print(f"Image saved: {png_path}")
+        print(f"Image saved: {os.path.normpath(png_path)}")
         qcddata = os.path.join(raw_dir, "qcdData")
         os.makedirs(qcddata, exist_ok=True)
         h5_name = default_filename.replace(".png", ".h5")
@@ -759,7 +778,7 @@ class HDF5Annotator:
             time_indices = np.arange(idxS, idxS + self.slice_length)
             hf.create_dataset("depth_line_by_time_idx",data=np.column_stack((time_indices, interp_values[:, 1])))
             hf.create_dataset("profile_data_slice", data=self.image)
-        print(f"Manual depth line saved: {h5_path}")
+        print(f"Manual depth line saved: {os.path.normpath(h5_path)}")
         self.update_whole_record(np.arange(idxS, idxS + self.slice_length), interp_values[:, 1])
         self.manual_line_saved = True
         self.unbind_all_events()
@@ -794,6 +813,7 @@ class HDF5Annotator:
         self.ax.tick_params(axis='y', labelsize=14)
         default_filename = f"{self.base_name}_bottomTraced_{idxS}-{idxS + self.slice_length - 1}.png"
         self.ax.set_title(default_filename, fontsize=16)
+        self.add_secondary_y_axis()
         self.canvas.draw()
         self.root.update()
         x0 = self.root.winfo_rootx() + self.canvas_widget.winfo_x()
@@ -807,7 +827,7 @@ class HDF5Annotator:
         os.makedirs(qcplots, exist_ok=True)
         png_path = os.path.join(qcplots, default_filename)
         self.image_for_saving.save(png_path)
-        print(f"Image saved: {png_path}")
+        print(f"Image saved: {os.path.normpath(png_path)}")
         qcddata = os.path.join(raw_dir, "qcdData")
         os.makedirs(qcddata, exist_ok=True)
         h5_name = default_filename.replace(".png", ".h5")
@@ -818,7 +838,7 @@ class HDF5Annotator:
             time_indices = np.arange(idxS, idxS + self.slice_length)
             hf.create_dataset("depth_line_by_time_idx",data=np.column_stack((time_indices, depth_coords)))
             hf.create_dataset("profile_data_slice", data=self.image)
-        print(f"Depth line saved: {h5_path}")
+        print(f"Depth line saved: {os.path.normpath(h5_path)}")
         self.update_whole_record(np.arange(idxS, idxS + self.slice_length), depth_coords)
         self.manual_line_saved = True
         self.unbind_all_events()
@@ -844,8 +864,8 @@ class HDF5Annotator:
             for i, idx in enumerate(time_indices):
                 dset[idx, 0] = idx
                 dset[idx, 1] = depth_values[i]
-        print(f'Whole record updated: {self.whole_record_file}')
-                 
+        print(f'Whole record updated: {os.path.normpath(self.whole_record_file)}')
+            
 if __name__ == "__main__":
     root = tk.Tk()
     app = HDF5Annotator(root)
