@@ -172,21 +172,28 @@ class bottomTracer:
         self.output_folder = raw_dir
         # whole‐record HDF5 stays in the raw data directory
         self.whole_record_file = os.path.join(raw_dir, f"{self.base_name}_bottomTraced_wholeRecord.h5")
-        self.menu_frame.pack_forget()
-        self.annotation_frame.pack(fill="both", expand=True)
-        self.idx_start = 0
-        self.depth_option.set("Ping Depth")
-        for child in self.depth_frame.winfo_children():
-            child.config(state="normal")
-        for child in self.y_axis_frame.winfo_children():
-            child.config(state="normal")
-        self.process_next_chunk()
+        # Whole-record HDF5 file setup
+        self.whole_record_file = os.path.join(raw_dir, f"{self.base_name}_bottomTraced_wholeRecord.h5")
+        # Initialize qaqc_depth_line in raw data file if not present
+        with h5py.File(self.input_file_path, "a") as raw_h5:
+            self.total_time = raw_h5["time"].shape[0]
+            if "qaqc_depth_line" not in raw_h5:
+                full_data = np.column_stack((np.arange(self.total_time), np.full(self.total_time, float(-999))))
+                raw_h5.create_dataset("qaqc_depth_line", data=full_data, maxshape=(self.total_time, 2))
+            self.menu_frame.pack_forget()
+            self.annotation_frame.pack(fill="both", expand=True)
+            self.idx_start = 0
+            self.depth_option.set("Ping Depth")
+            for child in self.depth_frame.winfo_children():
+                child.config(state="normal")
+            for child in self.y_axis_frame.winfo_children():
+                child.config(state="normal")
+            self.process_next_chunk()
 
     def process_next_chunk(self):
         if not self.input_file_path:
             return
         with h5py.File(self.input_file_path, "r") as f:
-            self.total_time = f["time"].shape[0]
             self.total_slices = int(np.ceil(self.total_time / self.chunk_size))
             self.slice_number = self.idx_start // self.chunk_size + 1
             end_idx = min(self.idx_start + self.chunk_size, self.total_time)
@@ -496,12 +503,12 @@ class bottomTracer:
             self.last_x, self.last_y = event.x, event.y
 
     def interpolate_coordinates_by_color(self, color):
-        x_coords = np.arange(self.chunk_size)
+        x_coords = np.arange(self.slice_length)
         filtered = [pt for pt in self.coordinates if pt[4] == color]
         if not filtered:
-            return np.column_stack((x_coords, np.full(self.chunk_size, np.nan)))
+            return np.column_stack((x_coords, np.full(self.slice_length, np.nan)))
         pts = sorted([(pt[2], pt[3]) for pt in filtered], key=lambda p: p[0])
-        y_interp = np.full(self.chunk_size, np.nan)
+        y_interp = np.full(self.slice_length, np.nan)
         for x in x_coords:
             for i in range(len(pts) - 1):
                 x0, y0 = pts[i]
@@ -512,11 +519,11 @@ class bottomTracer:
         return np.column_stack((x_coords, y_interp))
 
     def interpolate_coordinates(self):
-        x_coords = np.arange(self.chunk_size)
+        x_coords = np.arange(self.slice_length)
         if not self.coordinates:
             return np.column_stack((x_coords, np.full(self.slice_length, float(-999))))
         pts = sorted([(pt[2], pt[3]) for pt in self.coordinates], key=lambda p: p[0])
-        y_interp = np.full(self.chunk_size, np.nan)
+        y_interp = np.full(self.slice_length, np.nan)
         for x in x_coords:
             for i in range(len(pts) - 1):
                 x0, y0 = pts[i]
@@ -606,7 +613,7 @@ class bottomTracer:
             if self.lasso:
                 self.lasso.disconnect_events()
             self.ax.set_title("Lasso Tool Active: Draw around points to remove. Press 'Finish Cleaning' when done.", fontsize=16)
-            self.lasso = LassoSelector(self.ax,onselect,props=dict(color='red'))
+            self.lasso = LassoSelector(self.ax,onselect,props=dict(color='red'),useblit=True)
             self.lasso.set_active(True)
             self.canvas.draw()
 
@@ -624,7 +631,6 @@ class bottomTracer:
 
   
     def enter_editing_mode(self):
-        self.enable_annotation()
         self.edit_mode = True
         self.draw_mode = "green"
         self.ax.clear()
@@ -954,6 +960,7 @@ class bottomTracer:
                 return
 
     def update_whole_record(self, time_indices, depth_values):
+        # Update the whole record file
         with h5py.File(self.whole_record_file, "a", locking=False) as hf:
             if "qaqc_depth_line" not in hf:
                 full_data = np.column_stack((np.arange(self.total_time), np.full(self.total_time, float(-999))))
@@ -962,7 +969,19 @@ class bottomTracer:
             for i, idx in enumerate(time_indices):
                 dset[idx, 0] = idx
                 dset[idx, 1] = depth_values[i]
+
+        # Mirror the same update in the raw data file
+        with h5py.File(self.input_file_path, "a") as raw_h5:
+            if "qaqc_depth_line" not in raw_h5:
+                full_data = np.column_stack((np.arange(self.total_time), np.full(self.total_time, float(-999))))
+                raw_h5.create_dataset("qaqc_depth_line", data=full_data, maxshape=(self.total_time, 2))
+            raw_dset = raw_h5["qaqc_depth_line"]
+            for i, idx in enumerate(time_indices):
+                raw_dset[idx, 0] = idx
+                raw_dset[idx, 1] = depth_values[i]
+
         print(f'Whole record updated: {os.path.normpath(self.whole_record_file)}')
+        print(f'Raw file qaqc_depth_line updated: {os.path.normpath(self.input_file_path)}')
             
 if __name__ == "__main__":
     root = tk.Tk()
