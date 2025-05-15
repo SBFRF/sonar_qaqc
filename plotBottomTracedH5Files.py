@@ -17,7 +17,7 @@ root = tk.Tk()
 root.withdraw()
 
 # Set the directory and file pattern
-labeled_dir = r'D:/gitRepos/sonar_qaqc/labeledData/20240724_sonarRaw/'
+labeled_dir = r'D:\gitRepos\sonar_qaqc\labeledData\ECT-D032_20250206_combo\\'
 filetypes = [("H5 files", "*.h5")]
 
 # Open a file selection dialog for the user to choose one H5 file
@@ -37,6 +37,10 @@ with h5py.File(selected_file, 'r') as f:
     elif "profile_data_slice" in f and "depth_line_by_slice_idx" in f:
         profile_data_slice = f["profile_data_slice"][:]
         depth_line = f["depth_line_by_slice_idx"][:]
+    elif "qaqc_depth_line" in f and "profile_data" in f:
+        profile_data_slice = f["profile_data"][:]
+        depth_line = f["qaqc_depth_line"][:]
+        
     else:
         messagebox.showerror("Missing Dataset", 
                              "The selected file does not contain the required datasets: either "
